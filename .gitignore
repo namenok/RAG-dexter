@@ -7,3 +7,5 @@ venv/
 
 embeddings.npy
 documents.json
+
+dexter_db/
