@@ -1,62 +1,58 @@
 import fitz
 import os
 import chromadb
+from chromadb.utils import embedding_functions
 
+embedding_model = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="BAAI/bge-base-en-v1.5")
 
 PDF_DATA_DIR = 'dexter_pdf_data'
-CHROMA_DB_PATH = 'dexter_db_pdf'
-COLLECTION_NAME = 'dexter_pdf_docs'
+COLLECTION_NAME_BGE = 'dexter_pdf_docs_bge'
+CHROMA_DB_PATH_BGE = 'dexter_db_pdf_bge'
 
-print(f"Запуск клієнта ChromaDB (збереження у папку '{CHROMA_DB_PATH}')...")
-client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+client = chromadb.PersistentClient(path=CHROMA_DB_PATH_BGE)
+
+try:
+    client.delete_collection(name=COLLECTION_NAME_BGE)
+    print(f"Old collection '{COLLECTION_NAME_BGE}' deleted.")
+except chromadb.errors.NotFoundError:
+    print(f"Collection '{COLLECTION_NAME_BGE}' not found. Creating a new one.")
 
 collection = client.get_or_create_collection(
-    name=COLLECTION_NAME,
+    name=COLLECTION_NAME_BGE,
+    embedding_function=embedding_model,
     metadata={"hnsw:space": "cosine"}
 )
-print(f"Колекцію '{COLLECTION_NAME}' завантажено/створено.")
+print(f"Collection '{COLLECTION_NAME_BGE}' loaded/created with 'bge-base-en-v1.5' model.")
 
-
-print(f"\nПочаток обробки файлів з '{PDF_DATA_DIR}'...")
 
 doc_id_counter = 0
-
 
 for filename in os.listdir(PDF_DATA_DIR):
     if filename.endswith('.pdf'):
         filepath = os.path.join(PDF_DATA_DIR, filename)
-
-        print(f"\n--- Обробка файлу: {filename} ---")
-
+        print(f"\n--- Processing file: {filename} ---")
         try:
             doc = fitz.open(filepath)
-
 
             for page_num in range(doc.page_count):
                 page = doc.load_page(page_num)
                 page_text = page.get_text()
 
-
-                chunks = [chunk.strip() for chunk in page_text.split('\n') if chunk.strip()]
-
-                if not chunks:
-                    print(f"  > Сторінка {page_num + 1} не містить тексту, пропускаємо.")
-                    continue
-
-                print(f"  > Знайдено {len(chunks)} чанків на сторінці {page_num + 1}.")
-
-
+                all_lines = [line.strip() for line in page_text.split('\n') if line.strip()]
+                LINES_PER_CHUNK = 5
                 chunk_num_in_page = 0
-                for chunk_text in chunks:
+
+                for i in range(0, len(all_lines), LINES_PER_CHUNK):
+                    chunk_lines_list = all_lines[i: i + LINES_PER_CHUNK]
+                    chunk_text = " ".join(chunk_lines_list)
                     chunk_num_in_page += 1
-
-
                     current_id = f"doc_{doc_id_counter}"
 
                     metadata = {
                         "source_file": filename,
                         "page_number": page_num + 1,
-                        "chunk_number_in_page": chunk_num_in_page
+                        "chunk_number_in_page": chunk_num_in_page,
+                        "first_line_in_group": i
                     }
 
                     collection.add(
@@ -64,12 +60,13 @@ for filename in os.listdir(PDF_DATA_DIR):
                         metadatas=[metadata],
                         ids=[current_id]
                     )
-
                     doc_id_counter += 1
 
+            print(
+                f"  > Found {chunk_num_in_page} chunks on page {page_num + 1} (grouping {LINES_PER_CHUNK} lines each).")
             doc.close()
 
         except Exception as e:
-            print(f"!! Помилка при обробці файлу {filename}: {e}")
+            print(f"!! Error processing file {filename}: {e}")
 
-print(f"\n🎉 Завантаження завершено. Загальна кількість 'чанків' (документів) у базі: {collection.count()}")
+print(f"\n Ingestion complete. Total 'chunks' (documents) in database: {collection.count()}")
