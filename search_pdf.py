@@ -26,29 +26,68 @@ my_queries_list = [
 ]
 
 my_query_for_llm = "Who are Dexter's main antagonists or complex relationships in the first three seasons?"
+hyde_prompt = f"""
+You are an expert on the TV show 'Dexter'.
+Please write a short, hypothetical passage that answers the question below.
+You can hallucinate or make up details if needed, but the answer must look like a real factual paragraph.
+Do NOT include any introductory text like "Here is the answer". Output ONLY the passage.
+
+Question: {my_query_for_llm}
+"""
+
+try:
+    response = ollama.chat(model='llama3', messages=[
+        {
+            'role': 'user',
+            'content': hyde_prompt,
+        }
+    ])
+
+    hyde_hallucination = response['message']['content']
+    print(f"\n--- LLM ANSWER ---")
+    print(hyde_hallucination)
+
+except Exception as e:
+    print(f"\n!! Error communicating with Ollama: {e}")
 
 k_initial_results = 10
 
-print(f"Query: '{my_queries_list}' (k={k_initial_results})")
+print(f"Query: '{[hyde_hallucination]}' (k={k_initial_results})")
 
+# hyDE + MultyQuery reslts
+ready_to_go = [hyde_hallucination] + my_queries_list
 results = collection.query(
-    query_texts=my_queries_list,
+    query_texts=ready_to_go,
     n_results=k_initial_results,
 )
 
-context_texts = results['documents'][0]
-metadatas = results['metadatas'][0]
 
-print(f"Retrieved {len(context_texts)} initial candidates.")
+all_flat_texts = []
+all_flat_metadatas = []
 
-pairs_for_reranker = [ (my_query_for_llm, chunk) for chunk in context_texts ]
+for sublist_texts, sublist_metas in zip(results['documents'], results['metadatas']):
+    for text, meta in zip(sublist_texts, sublist_metas):
+        all_flat_texts.append(text)
+        all_flat_metadatas.append(meta)
+
+seen_texts = set()
+unique_texts = []
+unique_metadatas = []
+
+for text, meta in zip(all_flat_texts, all_flat_metadatas):
+    if text not in seen_texts:
+        seen_texts.add(text)
+        unique_texts.append(text)
+        unique_metadatas.append(meta)
+
+
+pairs_for_reranker = [ (my_query_for_llm, chunk) for chunk in unique_texts ]
 new_scores = reranker_model.predict(pairs_for_reranker)
 
-res = list(zip(new_scores, context_texts, metadatas))
+res = list(zip(new_scores, unique_texts, unique_metadatas))
 res.sort(key=lambda x: x[0], reverse=True)
 top_3_results = res[0:3]
 
-print("\n--- STAGE 3: TOP 3 RERANKED RESULTS ---")
 
 context_for_ollama = []
 
